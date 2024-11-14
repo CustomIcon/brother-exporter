@@ -26,6 +26,7 @@ func readInformation(address string) (map[string]string, error) {
 	if err != nil {
 		return information, err
 	}
+	defer response.Body.Close()
 
 	records, err := csv.NewReader(response.Body).ReadAll()
 	if err != nil {
@@ -41,36 +42,35 @@ func readInformation(address string) (map[string]string, error) {
 	return information, nil
 }
 
-func collectMetrics(address string) *prometheus.Registry {
-	success := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name:        "success",
+func collectMetrics(address string, registry *prometheus.Registry) {
+	success := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "brother_success",
+		Help:        "Indicates if the last scrape was successful (1) or not (0).",
 		ConstLabels: map[string]string{"host": address},
-	}, []string{})
-	registry := prometheus.NewRegistry()
-	registry.Register(success)
+	})
+	registry.MustRegister(success)
 
 	information, err := readInformation(address)
 	if err != nil {
-		success.WithLabelValues().Set(0)
-		log.Printf("%#v", err)
-		return registry
+		success.Set(0)
+		log.Printf("Error collecting data for %s: %v", address, err)
+		return
 	}
 
-	success.WithLabelValues().Set(1)
+	success.Set(1)
 
 	for name, value := range information {
 		floatValue, err := strconv.ParseFloat(value, 64)
 		if err == nil {
-			registry.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			metric := prometheus.NewGauge(prometheus.GaugeOpts{
 				Name:        fmt.Sprintf("brother_%s", name),
+				Help:        fmt.Sprintf("Metric %s for Brother printer", name),
 				ConstLabels: map[string]string{"host": address},
-			}, func() float64 {
-				return floatValue
-			}))
+			})
+			metric.Set(floatValue)
+			registry.MustRegister(metric)
 		}
 	}
-
-	return registry
 }
 
 func main() {
@@ -79,12 +79,12 @@ func main() {
 	http.HandleFunc("/metrics", func(response http.ResponseWriter, request *http.Request) {
 		host := request.URL.Query().Get("host")
 		if host == "" {
-			response.WriteHeader(http.StatusBadRequest)
-			response.Write([]byte("Query parameters `host` is required"))
+			http.Error(response, "Query parameter `host` is required", http.StatusBadRequest)
 			return
 		}
 
-		registry := collectMetrics(host)
+		registry := prometheus.NewRegistry()
+		collectMetrics(host, registry)
 
 		promhttp.HandlerFor(
 			registry,
