@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/csv"
-	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"regexp"
@@ -15,8 +15,34 @@ import (
 )
 
 var (
-	listen = flag.String("listen", ":9055", "Host and port to listen on")
+	listen    = ":9055"
+	printerIPs []string
 )
+
+func loadPrinterIPs(configFile string) error {
+	data, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("could not read printers.yml file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "printers:") {
+		return fmt.Errorf("printers section not found in the configuration file")
+	}
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") {
+			ip := strings.TrimPrefix(line, "- ")
+			printerIPs = append(printerIPs, ip)
+		}
+	}
+
+	if len(printerIPs) == 0 {
+		return fmt.Errorf("no printer IPs found in the printers.yml file")
+	}
+
+	return nil
+}
 
 func readInformation(address string) (map[string]string, error) {
 	information := map[string]string{}
@@ -74,24 +100,22 @@ func collectMetrics(address string, registry *prometheus.Registry) {
 }
 
 func main() {
-	flag.Parse()
+	err := loadPrinterIPs("/etc/printers.yml")
+	if err != nil {
+		log.Fatalf("Error loading printer IPs from /etc/printers.yml: %v", err)
+	}
 
 	http.HandleFunc("/metrics", func(response http.ResponseWriter, request *http.Request) {
-		host := request.URL.Query().Get("host")
-		if host == "" {
-			http.Error(response, "Query parameter `host` is required", http.StatusBadRequest)
-			return
-		}
-
 		registry := prometheus.NewRegistry()
-		collectMetrics(host, registry)
-
+		for _, host := range printerIPs {
+			collectMetrics(host, registry)
+		}
 		promhttp.HandlerFor(
 			registry,
 			promhttp.HandlerOpts{},
 		).ServeHTTP(response, request)
 	})
 
-	log.Printf("Starting to listen on %s", *listen)
-	log.Fatal(http.ListenAndServe(*listen, nil))
+	log.Printf("Starting to listen on %s", listen)
+	log.Fatal(http.ListenAndServe(listen, nil))
 }
