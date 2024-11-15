@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -15,7 +16,8 @@ import (
 )
 
 var (
-	listen    = ":9055"
+	listen     = flag.String("listen", ":9055", "Host and port to listen on")
+	configPath = flag.String("config", "/etc/printers.yml", "Path to the printers.yml configuration file")
 	printerIPs []string
 )
 
@@ -100,9 +102,10 @@ func collectMetrics(address string, registry *prometheus.Registry) {
 }
 
 func main() {
-	err := loadPrinterIPs("/etc/printers.yml")
+	flag.Parse()
+	err := loadPrinterIPs(*configPath)
 	if err != nil {
-		log.Fatalf("Error loading printer IPs from /etc/printers.yml: %v", err)
+		log.Fatalf("Error loading printer IPs from %s: %v", *configPath, err)
 	}
 
 	http.HandleFunc("/metrics", func(response http.ResponseWriter, request *http.Request) {
@@ -116,6 +119,6 @@ func main() {
 		).ServeHTTP(response, request)
 	})
 
-	log.Printf("Starting to listen on %s", listen)
-	log.Fatal(http.ListenAndServe(listen, nil))
+	log.Printf("Starting to listen on %s with config file %s", *listen, *configPath)
+	log.Fatal(http.ListenAndServe(*listen, nil))
 }
